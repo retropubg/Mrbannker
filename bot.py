@@ -210,7 +210,7 @@ async def ch(message: types.Message):
             "action": "wp_full_stripe_payment_charge",
             "formName": "default",
             "formNonce": form
-            "fullstripe_name": "Name"
+            "fullstripe_name": "Name",
             "fullstripe_email": "Email"
             "fullstripe_custom_amount": "1",
             "fullstripe_amount_index": 0,

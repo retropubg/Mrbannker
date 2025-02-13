@@ -7,7 +7,6 @@ import random
 import yaml
 import asyncio
 import re
-import telebot
 
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.utils.exceptions import Throttled

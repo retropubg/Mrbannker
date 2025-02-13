@@ -207,15 +207,16 @@ async def ch(message: types.Message):
         form = re.findall(r'formNonce" value="([^\'" >]+)', nonce.text)
         # hmm
         load = {
-            "action": "wp_full_stripe_payment_charge",
-            "formName": "default",
-            "formNonce": form
-            "fullstripe_name": "Name",
-            "fullstripe_email": "Email"
-            "fullstripe_custom_amount": "1",
-            "fullstripe_amount_index": 0,
-            "stripeToken": Id
-        }
+    "action": "wp_full_stripe_payment_charge",
+    "formName": "default",
+    "formNonce": form,
+    "fullstripe_name": "Name",  # Añade la coma aquí
+    "fullstripe_email": Email,
+    "fullstripe_custom_amount": "1",
+    "fullstripe_amount_index": 0,
+    "stripeToken": Id
+}
+
 
         header = {
             "accept": "application/json, text/javascript, */*; q=0.01",
